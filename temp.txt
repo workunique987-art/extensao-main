@@ -1,0 +1,16 @@
+marked_path = "marked_demo.png"
+
+    print(f"\nUsing marked sample: {marked_path}")
+    
+    # Grade the marked sample
+    expected_answers = ["A", "B", "C", "D", "E", "A", "B", "C", "D", "E", 
+                       "A", "B", "C", "D", "E", "A", "B", "C", "D", "E"]
+    
+    results = grade_gabarito_improved(
+        image_path=marked_path,
+        expected_answers=expected_answers,
+        position_data=position_data,
+        debug=True
+    )
+    
+    print_grade_report(results)

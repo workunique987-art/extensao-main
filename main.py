@@ -1,0 +1,458 @@
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import math
+import json
+import os
+
+print(f"OpenCV version: {cv2.__version__}")
+print(f"Pillow version: {Image.__version__}")
+print(f"NumPy version: {np.__version__}")
+
+def generate_gabarito_png_improved(
+    filename="gabarito_improved.png",
+    num_questions=50,
+    choices=("A", "B", "C", "D", "E"),
+    margin=50,
+    spacing_y=20,
+    bubble_diameter=20,
+    title="GABARITO FIXO",
+    subtitle="Nome: _________________________   Numero: ____   Turma: ______",
+    font_path=None,
+    add_reference_marks=True
+):
+    try:
+        # Try to find a common font
+        if font_path is None:
+            # Common font paths for different systems
+            possible_fonts = [
+                "arial.ttf",
+                "Arial.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/Library/Fonts/Arial.ttf",
+                "C:/Windows/Fonts/arial.ttf"
+            ]
+            
+            for font in possible_fonts:
+                if os.path.exists(font):
+                    font_path = font
+                    break
+            else:
+                # If no font found, use default
+                font_path = None
+        
+        if font_path:
+            title_font = ImageFont.truetype(font_path, 60)  # Reduced size for local
+            subtitle_font = ImageFont.truetype(font_path, 24)
+            q_font = ImageFont.truetype(font_path, 28)
+            choice_font = ImageFont.truetype(font_path, 28)
+            header_font = ImageFont.truetype(font_path, 20)
+        else:
+            # Use default fonts if no TTF found
+            title_font = ImageFont.load_default()
+            subtitle_font = ImageFont.load_default()
+            q_font = ImageFont.load_default()
+            choice_font = ImageFont.load_default()
+            header_font = ImageFont.load_default()
+    except Exception as e:
+        print(f"Font warning: {e}, using default fonts")
+        title_font = ImageFont.load_default()
+        subtitle_font = ImageFont.load_default()
+        q_font = ImageFont.load_default()
+        choice_font = ImageFont.load_default()
+        header_font = ImageFont.load_default()
+
+    if num_questions > 10:
+        columns = num_questions // 10
+    else:
+        columns = 1
+
+    rows_per_col = math.ceil(num_questions / columns)
+    estimated_row_height = spacing_y + bubble_diameter
+
+    header_height = 40
+    required_height = int(margin * 2 + header_height + 10 + rows_per_col * estimated_row_height + 50)
+
+    calculated_width = 300 * columns
+    page_size = (1240, 877)
+
+    img = Image.new("RGB", page_size, "white")
+    draw = ImageDraw.Draw(img)
+
+    w, h = page_size
+
+    # Get text dimensions for centering
+    title_bbox = draw.textbbox((0, 0), title, font=title_font)
+    title_width = title_bbox[2] - title_bbox[0]
+    title_x = (w - title_width) // 2
+    
+    draw.text((title_x, margin//2), title, font=title_font, fill="black")
+    top = margin + 15 + header_height
+    bottom = h - margin
+    usable_height = bottom - top
+    col_width = (w - 2*margin) / columns
+    row_height = min(spacing_y + bubble_diameter, usable_height / rows_per_col)
+
+    bubble_positions = []
+
+    q = 1
+    for col in range(columns):
+        x0 = margin + col * col_width
+        x_question_num = x0 + 20
+        temp_bbox = draw.textbbox((0,0), f"{q:02d}.", font=q_font)
+        q_text_width = temp_bbox[2] - temp_bbox[0]
+        x_choices_start = x_question_num + q_text_width + 30
+
+        header_y = margin + 15
+        for i, ch in enumerate(choices):
+            cx = int(x_choices_start + i * (bubble_diameter + 20))
+            bbox = draw.textbbox((0, 0), ch, font=header_font)
+            w_ch = bbox[2] - bbox[0]
+            h_ch = bbox[3] - bbox[1]
+            tx = cx + (bubble_diameter - w_ch) / 2
+            ty = header_y
+            draw.text((tx, ty), ch, font=header_font, fill="black")
+
+            line_y_start = ty + h_ch + 2
+            line_y_end = top - 5
+            if line_y_end > line_y_start:
+                draw.line([(cx + bubble_diameter//2, line_y_start),
+                          (cx + bubble_diameter//2, line_y_end)],
+                         fill="black", width=1)
+
+        for row in range(rows_per_col):
+            if q > num_questions:
+                break
+            y = int(top + row * row_height)
+            draw.text((x_question_num, y), f"{q:02d}.", font=q_font, fill="black")
+
+            question_bubbles = []
+            for i, ch in enumerate(choices):
+                cx = int(x_choices_start + i * (bubble_diameter + 20))
+                cy = int(y + (bubble_diameter/4) - bubble_diameter/2)
+
+                # Draw bubble WITHOUT letter inside (clean for marking)
+                draw.ellipse([cx, cy, cx + bubble_diameter, cy + bubble_diameter],
+                           outline="black", width=2)
+
+                # Store position for reference
+                question_bubbles.append({
+                    'choice': ch,
+                    'center': (cx + bubble_diameter//2, cy + bubble_diameter//2),
+                    'bbox': (cx, cy, cx + bubble_diameter, cy + bubble_diameter),
+                    'header_pos': (cx + bubble_diameter//2, header_y)
+                })
+
+            bubble_positions.append({
+                'question': q,
+                'bubbles': question_bubbles,
+                'question_pos': (x_question_num, y)
+            })
+            q += 1
+
+    # Add reference marks for precise detection
+    if add_reference_marks:
+        mark_size = 15
+        # Top-left: Cross pattern
+        draw.line([(margin, margin), (margin+mark_size, margin)], fill="black", width=3)
+        draw.line([(margin, margin), (margin, margin+mark_size)], fill="black", width=3)
+        
+        # Top-right: L pattern
+        draw.line([(w-margin, margin), (w-margin-mark_size, margin)], fill="black", width=3)
+        draw.line([(w-margin, margin), (w-margin, margin+mark_size)], fill="black", width=3)
+        
+        # Bottom-left: Square pattern
+        draw.rectangle([(margin, h-margin-mark_size), (margin+mark_size, h-margin)],
+                      outline="black", width=3)
+        
+        # Bottom-right: Circle pattern
+        draw.ellipse([(w-margin-mark_size, h-margin-mark_size), (w-margin, h-margin)],
+                    outline="black", width=3)
+
+        # Add alignment marks along the sides
+        for i in range(3):
+            y_mark = margin + header_height + (h - 2*margin - header_height) * (i+1) // 4
+            draw.line([(margin-15, y_mark), (margin-5, y_mark)], fill="black", width=2)
+            draw.line([(w-margin+5, y_mark), (w-margin+15, y_mark)], fill="black", width=2)
+
+    footer_text = "Assinale apenas uma opcao por questao. Use caneta preta ou azul."
+    bbox = draw.textbbox((0, 0), footer_text, font=subtitle_font)
+    fw = bbox[2] - bbox[0]
+    fh = bbox[3] - bbox[1]
+
+    subtitle_bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
+    subtitle_width = subtitle_bbox[2] - subtitle_bbox[0]
+    subtitle_x = (w - subtitle_width) // 2
+    
+    draw.text((subtitle_x, h - margin - 40), subtitle, font=subtitle_font, fill="black")
+    draw.text((subtitle_x, h - margin - 15), footer_text, font=subtitle_font, fill="black")
+
+    img.save(filename, dpi=(300,300))
+
+    # Save bubble positions
+    position_data = {
+        'bubble_positions': bubble_positions,
+        'page_size': page_size,
+        'margin': margin,
+        'bubble_diameter': bubble_diameter,
+        'choices': choices
+    }
+
+    with open(filename.replace('.png', '_positions.json'), 'w') as f:
+        json.dump(position_data, f, indent=2)
+
+    return filename, position_data
+
+def grade_with_precise_positions(binary_img, bubble_positions, expected_answers, threshold, debug=False):
+    """
+    Grade using precisely known bubble positions
+    """
+    question_results = []
+    score = 0
+    
+    debug_img = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR) if debug else None
+    
+    for q_data in bubble_positions:
+        q_num = q_data['question']
+        bubbles = q_data['bubbles']
+        
+        bubble_status = {}
+        marked_choices = []
+        
+        for bubble in bubbles:
+            choice = bubble['choice']
+            x1, y1, x2, y2 = bubble['bbox']
+            
+            # Extract bubble region
+            bubble_roi = binary_img[max(0,y1):min(binary_img.shape[0],y2), 
+                                  max(0,x1):min(binary_img.shape[1],x2)]
+            
+            if bubble_roi.size == 0:
+                filled_ratio = 0
+            else:
+                total_pixels = bubble_roi.size
+                filled_pixels = np.sum(bubble_roi > 0)
+                filled_ratio = filled_pixels / total_pixels
+            
+            bubble_status[choice] = filled_ratio
+            
+            if filled_ratio > threshold:
+                marked_choices.append(choice)
+        
+        # Determine answer
+        if len(marked_choices) == 1:
+            student_answer = marked_choices[0]
+            is_correct = (student_answer == expected_answers[q_num-1])
+            if is_correct:
+                score += 1
+        else:
+            student_answer = "MULTI" if len(marked_choices) > 1 else "NONE"
+            is_correct = False
+        
+        question_results.append({
+            'question': q_num,
+            'student_answer': student_answer,
+            'correct_answer': expected_answers[q_num-1],
+            'is_correct': is_correct,
+            'bubble_status': bubble_status
+        })
+        
+        # Debug visualization
+        if debug and debug_img is not None:
+            correct_answer = expected_answers[q_num-1]
+            
+            for bubble in bubbles:
+                choice = bubble['choice']
+                center_x, center_y = bubble['center']
+                filled_ratio = bubble_status[choice]
+                
+                # Determine colors based on answer status
+                if choice == correct_answer and choice == student_answer:
+                    color = (0, 255, 0)  # Green
+                    status_text = "CORRECT"
+                elif choice == correct_answer and student_answer not in ['MULTI', 'NONE']:
+                    color = (255, 0, 0)  # Blue
+                    status_text = "SHOULD BE"
+                elif choice == student_answer and not is_correct and student_answer not in ['MULTI', 'NONE']:
+                    color = (0, 0, 255)  # Red
+                    status_text = "WRONG"
+                elif filled_ratio > threshold:
+                    color = (0, 165, 255)  # Orange
+                    status_text = "MULTI"
+                else:
+                    color = (128, 128, 128)  # Gray
+                    status_text = "empty"
+                
+                cv2.circle(debug_img, (center_x, center_y), 20, color, 3)
+                
+                cv2.putText(debug_img, f"{filled_ratio:.2f}", 
+                           (center_x-25, center_y-25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                cv2.putText(debug_img, status_text, 
+                           (center_x-25, center_y+35), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            
+            # Question summary
+            question_pos = q_data.get('question_pos', (bubbles[0]['center'][0] - 100, bubbles[0]['center'][1]))
+            summary_color = (0, 255, 0) if is_correct else (0, 0, 255)
+            summary_text = f"Q{q_num}: Student={student_answer}, Correct={correct_answer} ({'✓' if is_correct else '✗'})"
+            cv2.putText(debug_img, summary_text, 
+                       (int(question_pos[0]), int(question_pos[1]) - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, summary_color, 2)
+    
+    if debug and debug_img is not None:
+        print("Grading visualization:")
+        print("- GREEN: Correctly marked answer")
+        print("- BLUE: Correct answer (should have been marked)")
+        print("- RED: Wrong answer marked by student") 
+        print("- ORANGE: Multiple answers marked")
+        print("- GRAY: Unmarked bubble")
+        
+        cv2.imshow("Grading Results", debug_img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    
+    return {
+        'total_score': score,
+        'max_score': len(bubble_positions),
+        'percentage': (score / len(bubble_positions)) * 100,
+        'question_results': question_results,
+        'multiple_answers': len([r for r in question_results if r['student_answer'] == 'MULTI']),
+        'unanswered': len([r for r in question_results if r['student_answer'] == 'NONE'])
+    }
+
+def grade_gabarito_improved(
+    image_path,
+    expected_answers,
+    position_data=None,
+    choices=("A", "B", "C", "D", "E"),
+    threshold=0.2,
+    debug=False
+):
+    """
+    Grade improved answer sheets with header labels
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Could not load image from {image_path}")
+    
+    # Preprocess
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Enhanced preprocessing
+    kernel = np.ones((3,3), np.uint8)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10
+    )
+    
+    # Removing small noise
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    
+    if debug:
+        print("Preprocessed binary image:")
+        cv2.imshow("Binary Image", binary)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    
+    if position_data is None:
+        print("Warning: No position data provided. You need to generate position data first.")
+        return None
+    
+    bubble_positions = position_data['bubble_positions']
+    
+    return grade_with_precise_positions(binary, bubble_positions, expected_answers, threshold, debug)
+
+def print_grade_report(grade_results):
+    """Print a formatted grade report"""
+    results = grade_results
+    print(f"\n=== GRADE REPORT ===")
+    print(f"Score: {results['total_score']}/{results['max_score']}")
+    print(f"Percentage: {results['percentage']:.1f}%")
+    print(f"Multiple answers: {results['multiple_answers']}")
+    print(f"Unanswered: {results['unanswered']}")
+    
+    # Calculate accuracy for answered questions
+    answered_questions = len(results['question_results']) - results['unanswered'] - results['multiple_answers']
+    if answered_questions > 0:
+        accuracy = (results['total_score'] / answered_questions) * 100
+        print(f"Accuracy (answered questions): {accuracy:.1f}%")
+    
+    print(f"\n=== DETAILED RESULTS ===")
+    for item in results['question_results']:
+        status = "○" if item['is_correct'] else "X"
+        if item['student_answer'] in ['MULTI', 'NONE']:
+            status = "!"  # Special status for multiple or no answers
+        
+        print(f"Q{item['question']:02d}: {status} Student={item['student_answer']:5} Correct={item['correct_answer']} ", end="")
+        
+        # Showing bubble status for incorrect answers
+        if not item['is_correct'] and item['student_answer'] not in ['MULTI', 'NONE']:
+            marked_ratio = item['bubble_status'][item['student_answer']]
+            correct_ratio = item['bubble_status'][item['correct_answer']]
+            print(f"(marked: {marked_ratio:.2f}, correct: {correct_ratio:.2f})", end="")
+        print()
+    
+    print(f"\n=== INCORRECT ANSWERS ===")
+    incorrect = [r for r in results['question_results'] if not r['is_correct']]
+    if incorrect:
+        for item in incorrect:
+            if item['student_answer'] == 'MULTI':
+                marked = [ch for ch, ratio in item['bubble_status'].items() if ratio > 0.4]
+                print(f"Q{item['question']:02d}: MULTIPLE answers {marked}, Correct={item['correct_answer']}")
+            elif item['student_answer'] == 'NONE':
+                print(f"Q{item['question']:02d}: UNANSWERED, Correct={item['correct_answer']}")
+            else:
+                print(f"Q{item['question']:02d}: Student={item['student_answer']}, Correct={item['correct_answer']}")
+    else:
+        print("No incorrect answers!")
+
+def demonstrate_improved_layout():
+    """Generate and display the improved layout"""
+    template_path, position_data = generate_gabarito_png_improved(
+        "demonstration_gabarito.png", 
+        num_questions=15,
+        add_reference_marks=True
+    )
+    
+    print("Generated improved template with:")
+    print("- Choice headers above bubbles")
+    print("- Better spacing between question numbers and bubbles")
+    print("- Reference marks for alignment")
+    print(f"- Saved positions to: {template_path.replace('.png', '_positions.json')}")
+    
+    # Display the image
+    img = Image.open(template_path)
+    print(f"\nTemplate size: {img.size}")
+    
+    print(f"\nFirst 3 questions bubble positions:")
+    for i in range(min(3, len(position_data['bubble_positions']))):
+        q_data = position_data['bubble_positions'][i]
+        print(f"Q{q_data['question']}: {len(q_data['bubbles'])} bubbles")
+        for bubble in q_data['bubbles']:
+            print(f"  {bubble['choice']}: center{bubble['center']}")
+    
+    return template_path, position_data
+
+if __name__ == "__main__":
+    
+    template_path, position_data = demonstrate_improved_layout()
+
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print(f"Gabarito gerado como '{template_path}'")
+    start_running = input("\n#\n# Após preencher o gabarito, pressione qualquer tecla para continuar...#\n#")
+
+    # marked_path = "marked_demo.png"
+    marked_path = "my_marked_sheet.png"
+
+    print(f"\nUsing marked sample: {marked_path}")
+    
+    expected_answers = ["A", "B", "C", "D", "E", "A", "B", "C", "D", "E", 
+                       "A", "B", "C", "D", "E", "A", "B", "C", "D", "E",
+                       "A", "B", "C", "D", "E"]
+    
+    results = grade_gabarito_improved(
+        image_path=marked_path,
+        expected_answers=expected_answers,
+        position_data=position_data,
+        debug=True
+    )
+    
+    print_grade_report(results)
